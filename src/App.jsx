@@ -72,24 +72,69 @@ function validateInput(input) {
   return null;
 }
 
-function analyze(input) {
+function analyze(input, nowIso) {
   const config = FIQH_RULES[input.madhhab];
   const rulesEvaluated = [];
   const consultationReasons = [];
+  // nowIso dipakai untuk menghitung durasi sementara episode yang masih berlangsung.
+  // Default: waktu saat analyze() dipanggil.
+  const now = nowIso || new Date().toISOString();
 
   const inputError = validateInput(input);
   if (inputError) {
-    return { status: "INPUT_ERROR", madhhab: input.madhhab, observedBleedingHours: null, rulesEvaluated: [], consultationReasons: [], message: `Periksa kembali tanggal atau waktu yang Anda masukkan. (${inputError})` };
+    return { status: "INPUT_ERROR", madhhab: input.madhhab, observedBleedingHours: null, rulesEvaluated: [], consultationReasons: [], analyzedAt: now, message: `Periksa kembali tanggal atau waktu yang Anda masukkan. (${inputError})` };
   }
 
-  const ongoing = input.episodes.some((ep) => ep.endDateTime === null);
-  if (ongoing) {
-    return { status: "PENDING", madhhab: input.madhhab, observedBleedingHours: null, rulesEvaluated: [], consultationReasons: [], message: "Masih dalam pengamatan. Hasil dapat berubah apabila darah berlanjut atau berhenti." };
+  // Cek apakah ada episode yang masih berlangsung
+  const ongoingEpisode = input.episodes.find((ep) => ep.endDateTime === null);
+  if (ongoingEpisode) {
+    // Hitung durasi sementara dari startDateTime ke sekarang
+    const tentativeHours = hoursBetween(ongoingEpisode.startDateTime, now);
+    const maxRuleId = ruleIdFor(input.madhhab, "MAX_HAYD");
+
+    // Jika durasi sementara sudah melampaui maxHaydHours -> langsung CONSULTATION_REQUIRED
+    if (tentativeHours > config.maxHaydHours) {
+      rulesEvaluated.push({
+        ruleId: maxRuleId,
+        label: "Maksimum haid (durasi sementara — episode masih berlangsung)",
+        thresholdHours: config.maxHaydHours,
+        actualHours: tentativeHours,
+        result: "FAIL",
+      });
+      consultationReasons.push("PROLONGED_BLEEDING_REQUIRES_ADVANCED_RULES");
+      return {
+        status: "CONSULTATION_REQUIRED",
+        madhhab: input.madhhab,
+        observedBleedingHours: tentativeHours,
+        rulesEvaluated,
+        consultationReasons,
+        analyzedAt: now,
+        message: `Darah sudah berlangsung ${fmtHours(tentativeHours)} (masih berlanjut) dan telah melampaui batas maksimum dasar Mazhab ${MADHHAB_LABEL[input.madhhab]}. HaidCheck menyarankan untuk segera konsultasikan kepada ahli fikih.`,
+      };
+    }
+
+    // Durasi sementara masih dalam batas -> PENDING seperti biasa
+    rulesEvaluated.push({
+      ruleId: maxRuleId,
+      label: "Maksimum haid (durasi sementara — episode masih berlangsung)",
+      thresholdHours: config.maxHaydHours,
+      actualHours: tentativeHours,
+      result: "PASS",
+    });
+    return {
+      status: "PENDING",
+      madhhab: input.madhhab,
+      observedBleedingHours: tentativeHours,
+      rulesEvaluated,
+      consultationReasons: [],
+      analyzedAt: now,
+      message: `Darah sudah berlangsung ${fmtHours(tentativeHours)} dan masih dalam batas maksimum dasar (${fmtHours(config.maxHaydHours)}). Catat kembali setelah darah berhenti untuk hasil yang lebih akurat.`,
+    };
   }
 
   if (input.episodes.length > 1) {
     consultationReasons.push("INTERMITTENT_BLEEDING");
-    return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours: null, rulesEvaluated: [], consultationReasons, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena pola darah terputus-putus (intermittent). Silakan konsultasikan kepada ahli fikih." };
+    return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours: null, rulesEvaluated: [], consultationReasons, analyzedAt: now, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena pola darah terputus-putus (intermittent). Silakan konsultasikan kepada ahli fikih." };
   }
 
   const episode = input.episodes[0];
@@ -99,7 +144,7 @@ function analyze(input) {
   rulesEvaluated.push({ ruleId: maxRuleId, label: "Maksimum haid", thresholdHours: config.maxHaydHours, actualHours: observedBleedingHours, result: observedBleedingHours <= config.maxHaydHours ? "PASS" : "FAIL" });
   if (observedBleedingHours > config.maxHaydHours) {
     consultationReasons.push("PROLONGED_BLEEDING_REQUIRES_ADVANCED_RULES");
-    return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena durasi darah melebihi batas maksimum dasar. Silakan konsultasikan kepada ahli fikih." };
+    return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, analyzedAt: now, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena durasi darah melebihi batas maksimum dasar. Silakan konsultasikan kepada ahli fikih." };
   }
 
   const tuhrRuleId = ruleIdFor(input.madhhab, "MIN_TUHR");
@@ -107,7 +152,7 @@ function analyze(input) {
     rulesEvaluated.push({ ruleId: tuhrRuleId, label: "Minimum masa suci sebelumnya", thresholdHours: config.minTuhrHours, actualHours: input.priorPurityHours, result: input.priorPurityHours >= config.minTuhrHours ? "PASS" : "FAIL" });
     if (input.priorPurityHours < config.minTuhrHours) {
       consultationReasons.push("INSUFFICIENT_TUHR");
-      return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena masa suci sebelumnya belum memenuhi batas minimum dasar. Silakan konsultasikan kepada ahli fikih." };
+      return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, analyzedAt: now, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena masa suci sebelumnya belum memenuhi batas minimum dasar. Silakan konsultasikan kepada ahli fikih." };
     }
   } else {
     rulesEvaluated.push({ ruleId: tuhrRuleId, label: "Minimum masa suci sebelumnya", thresholdHours: config.minTuhrHours, actualHours: null, result: "NOT_EVALUATED" });
@@ -120,19 +165,19 @@ function analyze(input) {
     rulesEvaluated.push({ ruleId: minRuleId, label: "Minimum haid (Maliki — tidak ada batas tetap)", thresholdHours: null, actualHours: observedBleedingHours, result: observedBleedingHours >= AMBIGUOUS_SHORT_THRESHOLD_HOURS ? "PASS" : "NOT_EVALUATED" });
     if (observedBleedingHours < AMBIGUOUS_SHORT_THRESHOLD_HOURS) {
       consultationReasons.push("MALIKI_MIN_HAYD_NOT_VALIDATED");
-      return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena durasi darah sangat singkat dan aturan minimum Mazhab Maliki belum tervalidasi untuk kasus ini. Silakan konsultasikan kepada ahli fikih." };
+      return { status: "CONSULTATION_REQUIRED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons, analyzedAt: now, message: "HaidCheck tidak dapat menentukan status kasus ini secara otomatis karena durasi darah sangat singkat dan aturan minimum Mazhab Maliki belum tervalidasi untuk kasus ini. Silakan konsultasikan kepada ahli fikih." };
     }
-    return { status: "HAID_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], message: "Berdasarkan parameter dasar Mazhab Maliki yang digunakan oleh HaidCheck, data ini memenuhi parameter yang digunakan untuk analisis." };
+    return { status: "HAID_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], analyzedAt: now, message: "Berdasarkan parameter dasar Mazhab Maliki yang digunakan oleh HaidCheck, data ini memenuhi parameter yang digunakan untuk analisis." };
   }
 
   const minHaydHours = config.minHaydHours;
   rulesEvaluated.push({ ruleId: minRuleId, label: "Minimum haid", thresholdHours: minHaydHours, actualHours: observedBleedingHours, result: observedBleedingHours >= minHaydHours ? "PASS" : "FAIL" });
 
   if (observedBleedingHours >= minHaydHours) {
-    return { status: "HAID_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], message: `Berdasarkan parameter dasar Mazhab ${MADHHAB_LABEL[input.madhhab]} yang digunakan oleh HaidCheck, data ini memenuhi parameter yang digunakan untuk analisis.` };
+    return { status: "HAID_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], analyzedAt: now, message: `Berdasarkan parameter dasar Mazhab ${MADHHAB_LABEL[input.madhhab]} yang digunakan oleh HaidCheck, data ini memenuhi parameter yang digunakan untuk analisis.` };
   }
 
-  return { status: "ISTIHADHAH_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], message: `Berdasarkan parameter dasar Mazhab ${MADHHAB_LABEL[input.madhhab]} yang digunakan oleh HaidCheck, data yang dimasukkan tidak memenuhi parameter minimum haid.` };
+  return { status: "ISTIHADHAH_SUPPORTED", madhhab: input.madhhab, observedBleedingHours, rulesEvaluated, consultationReasons: [], analyzedAt: now, message: `Berdasarkan parameter dasar Mazhab ${MADHHAB_LABEL[input.madhhab]} yang digunakan oleh HaidCheck, data yang dimasukkan tidak memenuhi parameter minimum haid.` };
 }
 
 const CONSULTATION_REASON_LABEL = {
@@ -321,7 +366,7 @@ function DisclaimerBanner() {
    mazhab yang dipilih.
    ============================================================ */
 
-function DurationTrack({ config, observedHours }) {
+function DurationTrack({ config, observedHours, ongoing }) {
   if (observedHours === null || observedHours === undefined) return null;
   const max = config.maxHaydHours * 1.15;
   const min = config.minHaydHours ?? 0;
@@ -347,7 +392,7 @@ function DurationTrack({ config, observedHours }) {
         />
       </div>
       <p style={{ fontSize: 11.5, color: "#8A8578", marginTop: 8 }}>
-        Titik teal menunjukkan durasi darah yang Anda catat ({fmtHours(observedHours)}){config.minHaydHours !== null ? `, garis clay menandai batas minimum (${fmtHours(config.minHaydHours)})` : ""}, garis merah menandai batas maksimum dasar.
+        Titik teal menunjukkan durasi darah yang Anda catat ({fmtHours(observedHours)}){ongoing ? " — episode masih berlangsung, durasi dihitung hingga saat analisis dijalankan" : ""}{config.minHaydHours !== null ? `, garis clay menandai batas minimum (${fmtHours(config.minHaydHours)})` : ""}, garis merah menandai batas maksimum dasar.
       </p>
     </div>
   );
@@ -532,7 +577,14 @@ function ResultView({ entry, onBack, onNewEntry, onShowSources }) {
       </button>
 
       <div style={{ background: meta.bg, border: `1px solid ${meta.color}33`, borderRadius: 14, padding: 20, marginBottom: 20 }}>
-        <Badge color={meta.color} bg="#FFFFFFaa">{MADHHAB_LABEL[input.madhhab]}</Badge>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <Badge color={meta.color} bg="#FFFFFFaa">{MADHHAB_LABEL[input.madhhab]}</Badge>
+          {result.analyzedAt && (
+            <span className="hc-mono" style={{ fontSize: 11, color: "#8A8578" }}>
+              Dianalisis pada: {fmtDateTime(result.analyzedAt)}
+            </span>
+          )}
+        </div>
         <h1 className="hc-display" style={{ fontSize: 22, fontWeight: 600, color: meta.color, marginTop: 10, marginBottom: 8 }}>{meta.label}</h1>
         <p style={{ fontSize: 13.5, color: "#3A3A34", lineHeight: 1.6 }}>{result.message}</p>
 
@@ -546,7 +598,7 @@ function ResultView({ entry, onBack, onNewEntry, onShowSources }) {
           </div>
         )}
 
-        {result.observedBleedingHours !== null && <DurationTrack config={config} observedHours={result.observedBleedingHours} />}
+        {result.observedBleedingHours !== null && <DurationTrack config={config} observedHours={result.observedBleedingHours} ongoing={result.status === 'PENDING'} />}
       </div>
 
       {result.rulesEvaluated.length > 0 && (
