@@ -405,10 +405,10 @@ function DurationTrack({ config, observedHours, ongoing }) {
 function OnboardingView({ onSelect }) {
   const [selected, setSelected] = useState(null);
   const options = [
-    { id: "hanafi", desc: "Minimum 3 hari, maksimum 10 hari." },
-    { id: "shafii", desc: "Minimum 1 hari, maksimum 15 hari." },
-    { id: "maliki", desc: "Tidak ada minimum tetap, maksimum 15 hari." },
-    { id: "hanbali", desc: "Minimum 1 hari, maksimum 15 hari." },
+    { id: "hanafi", desc: "Mazhab yang banyak diikuti di Asia Selatan, Turki, dan sebagian Asia Tengah. Umumnya diikuti oleh muslimah yang keluarganya bermazhab Hanafi." },
+    { id: "shafii", desc: "Mazhab yang paling umum di Indonesia, Malaysia, dan sebagian besar Asia Tenggara. Jika Anda tidak yakin, kemungkinan besar Anda mengikuti mazhab ini." },
+    { id: "maliki", desc: "Mazhab yang banyak diikuti di Afrika Utara, Afrika Barat, dan sebagian Timur Tengah." },
+    { id: "hanbali", desc: "Mazhab yang banyak diikuti di Arab Saudi dan sebagian negara Teluk. Umumnya diikuti oleh muslimah yang keluarganya bermazhab Hanbali." },
   ];
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", padding: "48px 20px" }}>
